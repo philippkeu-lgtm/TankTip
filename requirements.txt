@@ -1,0 +1,9 @@
+streamlit==1.32.0
+requests
+yfinance
+google-generativeai
+pandas
+feedparser
+plotly
+geopy
+python-dotenv
