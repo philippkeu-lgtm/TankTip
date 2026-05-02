@@ -2,7 +2,7 @@ name: Automatischer Tank-Sauger
 
 on:
   schedule:
-    # Startet um 7 Minuten nach der vollen Stunde (um den GitHub-Stau zu umgehen)
+    # Startet um 7 Minuten nach der vollen Stunde
     - cron: '7 * * * *'
   workflow_dispatch:
 
@@ -18,10 +18,10 @@ jobs:
           python-version: '3.10'
           
       - name: Bibliotheken installieren
-        # Hier ist der wichtige Fix: jax[cpu] wurde hinzugefügt!
+        # Hier ist paxml jetzt mit auf der Liste!
         run: |
           pip install requests gspread oauth2client pytz
-          pip install timesfm huggingface_hub jax[cpu]
+          pip install timesfm huggingface_hub jax[cpu] paxml
           
       - name: Sauger & KI starten
         env:
