@@ -99,9 +99,22 @@ st.markdown("""
 
 def hole_koordinaten(ort):
     try:
-        loc = Nominatim(user_agent="tanktroll_v5").geocode(f"{ort}, Deutschland", timeout=10)
+        # 1. Versuch: Der blitzschnelle Postleitzahlen-Profi (Zippopotamus)
+        # Wenn jemand eine 5-stellige deutsche PLZ eingibt, blockt OSM uns nicht!
+        ort = str(ort).strip()
+        if ort.isdigit() and len(ort) == 5:
+            resp = requests.get(f"https://api.zippopotam.us/de/{ort}", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                lat = float(data['places'][0]['latitude'])
+                lng = float(data['places'][0]['longitude'])
+                return lat, lng
+                
+        # 2. Versuch: Unser alter Kartendienst als "Fallback" (falls jemand Text wie "Hamburg" eingibt)
+        loc = Nominatim(user_agent="tanktroll_pro_v1").geocode(f"{ort}, Deutschland", timeout=10)
         return (loc.latitude, loc.longitude) if loc else (None, None)
-    except: return None, None
+    except: 
+        return None, None
 
 def hole_marktpreis(ticker):
     try:
@@ -168,7 +181,7 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
         # Sicherheits-Check 1: Koordinaten
         if lat is None or lng is None:
             st.error(f"❌ Fehler: Konnte keine Koordinaten für '{ort_in}' finden. Der Server blockiert vielleicht.")
-            st.stop() # Bricht hier ab, damit es keine Folgefehler gibt
+            st.stop()
             
         news_delta, news_msg = ki_news_check()
         
