@@ -1,55 +1,27 @@
-import os
-import json
-import requests
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
-import pytz
+name: Automatischer Tank-Sauger
 
-def run_sauger():
-    # Zeit auf Schleswig/Deutschland einstellen
-    tz = pytz.timezone('Europe/Berlin')
-    zeit_jetzt = datetime.now(tz).strftime("%d.%m.%Y %H:%M")
-    
-    tk_key = os.environ.get("TANKERKOENIG_API_KEY")
-    gcp_json = os.environ.get("GCP_SERVICE_ACCOUNT")
-    
-    # Abfrage für Schleswig (Beispielkoordinaten)
-    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat=54.492&lng=9.553&rad=2&sort=price&type=e5&apikey={tk_key}"
-    
-    try:
-        response = requests.get(url)
-        data = response.json()
+on:
+  schedule:
+    - cron: '0 * * * *' # Läuft jede Stunde zur vollen Stunde
+  workflow_dispatch: # Das ist der Schalter für den "Run workflow" Button
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Bibliotheken installieren
+        # Wir installieren pytz direkt mit, damit die Uhrzeit im Sheet stimmt
+        run: pip install requests gspread oauth2client pytz
         
-        if data.get("ok") and len(data.get("stations", [])) > 0:
-            station_data = data["stations"][0]
-            bester_preis = station_data.get("price")
-            station_name = station_data.get("name")
-
-            # Falls kein Preis da ist (Tankstelle zu), schreiben wir GESCHLOSSEN
-            if bester_preis is None or bester_preis == 0:
-                final_preis = "GESCHLOSSEN" 
-            else:
-                final_preis = bester_preis
-        else:
-            print("Keine Daten von Tankerkönig erhalten.")
-            return
-
-        # Ab in das Google Sheet
-        creds_dict = json.loads(gcp_json)
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        sheet = client.open("Tankprotokoll").sheet1
-        
-        zeile = [zeit_jetzt, "24837", "e5", final_preis, "", "", "🤖 Auto-Sauger", station_name]
-        
-        sheet.append_row(zeile)
-        print(f"Erfolg: {final_preis} eingetragen um {zeit_jetzt}")
-
-    except Exception as e:
-        print(f"Fehler im Ablauf: {e}")
-
-if __name__ == "__main__":
-    run_sauger()
+      - name: Sauger starten
+        env:
+          TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: python sauger.py
