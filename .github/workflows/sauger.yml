@@ -1,23 +1,59 @@
-name: Automatischer Tank-Sauger
+import os
+import json
+import requests
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
+import pytz # Für die korrekte deutsche Zeit
 
-on:
-  schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+def run_sauger():
+    # 1. Zeit auf Deutsch einstellen
+    tz = pytz.timezone('Europe/Berlin')
+    zeit_jetzt = datetime.now(tz).strftime("%d.%m.%Y %H:%M")
+    
+    tk_key = os.environ.get("TANKERKOENIG_API_KEY")
+    gcp_json = os.environ.get("GCP_SERVICE_ACCOUNT")
+    
+    # Tankerkönig abfragen (Beispielkoordinaten Schleswig)
+    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat=54.516&lng=9.565&rad=5&sort=price&type=e5&apikey={tk_key}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        if data.get("ok") and len(data.get("stations", [])) > 0:
+            station_data = data["stations"][0]
+            ist_offen = station_data.get("isOpen")
+            bester_preis = station_data.get("price")
+            station_name = station_data.get("name")
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Python einrichten
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Bibliotheken installieren
-        run: pip install requests gspread oauth2client
-      - name: Sauger starten
-        env:
-          TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
-          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-        run: python sauger.py
+            # Logik für geschlossene Tankstellen / Fehlende Preise
+            if bester_preis is None or bester_preis == 0:
+                # Falls zu, schreiben wir einen Hinweis, damit die KI später 
+                # diese Zeile ignorieren oder den Vorwert nehmen kann
+                final_preis = "GESCHLOSSEN" 
+            else:
+                final_preis = bester_preis
+        else:
+            print("Keine Daten von API erhalten")
+            return
+
+        # 2. In Google Sheets schreiben
+        creds_dict = json.loads(gcp_json)
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        
+        sheet = client.open("Tankprotokoll").sheet1
+        
+        # Zeile bauen: [Zeit, PLZ, Sorte, Preis, KI_Ziel, Empfehlung, Bot-Name, Station]
+        zeile = [zeit_jetzt, "24837", "e5", final_preis, "", "", "🤖 Auto-Sauger", station_name]
+        
+        sheet.append_row(zeile)
+        print(f"Eintrag erfolgreich: {final_preis} bei {station_name}")
+
+    except Exception as e:
+        print(f"Fehler: {e}")
+
+if __name__ == "__main__":
+    run_sauger()
