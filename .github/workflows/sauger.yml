@@ -2,7 +2,7 @@ name: Automatischer Tank-Sauger
 
 on:
   schedule:
-    # Startet jetzt immer um 7 Minuten nach der vollen Stunde (z.B. 14:07, 15:07)
+    # Startet um 7 Minuten nach der vollen Stunde (um den GitHub-Stau zu umgehen)
     - cron: '7 * * * *'
   workflow_dispatch:
 
@@ -18,10 +18,15 @@ jobs:
           python-version: '3.10'
           
       - name: Bibliotheken installieren
-        run: pip install requests gspread oauth2client pytz
-        
-      - name: Sauger starten
+        # Das | Symbol bedeutet, wir können mehrere Befehle untereinander schreiben
+        run: |
+          pip install requests gspread oauth2client pytz
+          pip install timesfm huggingface_hub
+          
+      - name: Sauger & KI starten
         env:
           TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-        run: python sauger.py
+        run: |
+          python sauger.py
+          python predictor.py
