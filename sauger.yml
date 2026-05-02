@@ -1,0 +1,23 @@
+name: Automatischer Tank-Sauger
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Läuft jede Stunde zur vollen Stunde
+  workflow_dispatch: # Damit kannst du ihn auch per Hand auf GitHub starten
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Python einrichten
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Bibliotheken installieren
+        run: pip install requests gspread oauth2client
+      - name: Sauger starten
+        env:
+          TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: python sauger.py
