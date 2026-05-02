@@ -96,7 +96,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- FUNKTIONEN ---
-
+st.write(f"Diagnose - Koordinaten: {lat}, {lng} | API-Key geladen: {bool(TK_KEY)}")
 def hole_koordinaten(ort):
     try:
         loc = Nominatim(user_agent="tanktroll_v5").geocode(f"{ort}, Deutschland", timeout=10)
