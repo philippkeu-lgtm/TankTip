@@ -96,7 +96,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- FUNKTIONEN ---
-st.write(f"Diagnose - Koordinaten: {lat}, {lng} | API-Key geladen: {bool(TK_KEY)}")
+
 def hole_koordinaten(ort):
     try:
         loc = Nominatim(user_agent="tanktroll_v5").geocode(f"{ort}, Deutschland", timeout=10)
@@ -142,15 +142,44 @@ oel = hole_marktpreis("BZ=F")
 if oel: st.sidebar.metric("Ölpreis (Brent)", f"{oel} $")
 ort_in = st.sidebar.text_input("📍 PLZ / Ort", "24837")
 srt_in = st.sidebar.selectbox("Kraftstoff", ["e5", "e10", "diesel"])
+
+# --- DIAGNOSE BEREICH ---
+st.sidebar.divider()
+st.sidebar.markdown("### 🔧 System-Diagnose")
+if TK_KEY:
+    st.sidebar.success("✅ Tankerkönig API geladen")
+else:
+    st.sidebar.error("❌ Tankerkönig API FEHLT!")
+
+if GM_KEY:
+    st.sidebar.success("✅ Gemini API geladen")
+else:
+    st.sidebar.warning("⚠️ Gemini API fehlt (News deaktiviert)")
+
 st.sidebar.divider()
 st.sidebar.caption("Tipp: Abends tanken spart meist am meisten!")
+
 
 # --- HAUPTBEREICH ---
 if st.button("🔍 MARKT-ANALYSE STARTEN"):
     with st.spinner("KI berechnet exaktes Zeitfenster und Variablen..."):
         lat, lng = hole_koordinaten(ort_in)
+        
+        # Sicherheits-Check 1: Koordinaten
+        if lat is None or lng is None:
+            st.error(f"❌ Fehler: Konnte keine Koordinaten für '{ort_in}' finden. Der Server blockiert vielleicht.")
+            st.stop() # Bricht hier ab, damit es keine Folgefehler gibt
+            
         news_delta, news_msg = ki_news_check()
-        stationen = sorted([s for s in hole_tankstellen(lat, lng, 5, srt_in) if s.get('price')], key=lambda x: x['price'])
+        
+        roh_stationen = hole_tankstellen(lat, lng, 5, srt_in)
+        
+        # Sicherheits-Check 2: Tankerkönig Antwort
+        if not roh_stationen:
+            st.warning(f"⚠️ Tankerkönig liefert eine leere Liste für {lat}, {lng}. Prüfe, ob der API-Key in der Streamlit Cloud gültig ist.")
+            st.stop()
+
+        stationen = sorted([s for s in roh_stationen if s.get('price')], key=lambda x: x['price'])
         
         if stationen:
             best = stationen[0]
@@ -215,7 +244,6 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
                 news_color = "#888"
                 news_label = "Wartend/Offline" if "lädt" in news_msg or "Offline" in news_msg else "Neutral"
             
-            # Kugelsicherer HTML-String ohne Zeilenumbrüche für Streamlit-Markdown
             html_kassenbon = (
                 f'<div class="analyse-box">'
                 f'<div class="accuracy-badge">🎯 Modell-Konfidenz: {fake_accuracy:.1f}% (basierend auf historischen Tageszyklen)</div>'
@@ -239,4 +267,4 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
                 </div>"""
             st.markdown(mast + '</div>', unsafe_allow_html=True)
         else:
-            st.error("Keine Tankstellen in diesem Radius gefunden.")
+            st.error("Keine Preis-Daten für diese Tankstellen gefunden.")
