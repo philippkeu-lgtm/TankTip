@@ -1,23 +1,61 @@
-name: Automatischer Tank-Sauger
+import os
+import json
+import requests
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-on:
-  schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+def run_sauger():
+    print("Starte Sauger...")
+    tk_key = os.environ.get("TANKERKOENIG_API_KEY")
+    gcp_json = os.environ.get("GCP_SERVICE_ACCOUNT")
+    
+    if not tk_key:
+        print("FEHLER: TANKERKOENIG_API_KEY nicht gefunden!")
+        return
+    if not gcp_json:
+        print("FEHLER: GCP_SERVICE_ACCOUNT (JSON) nicht gefunden!")
+        return
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Python einrichten
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Bibliotheken installieren
-        run: pip install requests gspread oauth2client
-      - name: Sauger starten
-        env:
-          TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
-          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-        run: python sauger.py
+    # Tankerkönig abfragen
+    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat=54.516&lng=9.565&rad=5&sort=price&type=e5&apikey={tk_key}"
+    print("Sende Anfrage an Tankerkönig...")
+    
+    response = requests.get(url)
+    
+    # --- NEUER SCHUTZSCHILD START ---
+    try:
+        data = response.json()
+    except Exception as e:
+        print("🚨 FEHLER: Tankerkönig hat kein Datenpaket gesendet!")
+        print(f"Stattdessen kam diese Antwort: {response.text}")
+        return
+    # --- NEUER SCHUTZSCHILD ENDE ---
+    
+    if data.get("ok") and len(data.get("stations", [])) > 0:
+        bester_preis = data["stations"][0]["price"]
+        station = data["stations"][0]["name"]
+        print(f"Preis gefunden: {bester_preis} bei {station}")
+    else:
+        print(f"FEHLER bei Tankerkönig API. Antwort: {data}")
+        return
+
+    # In Google Sheets schreiben
+    try:
+        creds_dict = json.loads(gcp_json)
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        
+        sheet = client.open("Tankprotokoll").sheet1
+        
+        zeit = datetime.now().strftime("%d.%m.%Y %H:%M")
+        zeile = [zeit, "24837", "e5", bester_preis, "", "", "🤖 Auto-Sauger", station]
+        
+        sheet.append_row(zeile)
+        print("ERFOLG: Zeile wurde ans Sheet gesendet!")
+    except Exception as e:
+        print(f"SCHWERE FEHLERMELDUNG BEI GOOGLE: {e}")
+
+if __name__ == "__main__":
+    run_sauger()
