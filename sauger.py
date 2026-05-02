@@ -14,7 +14,9 @@ def run_sauger():
     tk_key = os.environ.get("TANKERKOENIG_API_KEY")
     gcp_json = os.environ.get("GCP_SERVICE_ACCOUNT")
     
-    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat=54.516&lng=9.565&rad=5&sort=price&type=e5&apikey={tk_key}"
+    # NEU: Wir nutzen die "all"-Abfrage, um E5, E10 und Diesel gleichzeitig zu bekommen
+    # Koordinaten für Schleswig (Flensburger Str.)
+    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat=54.526&lng=9.546&rad=4&sort=dist&type=all&apikey={tk_key}"
     
     try:
         # Sheet verbinden
@@ -24,39 +26,43 @@ def run_sauger():
         client = gspread.authorize(creds)
         sheet = client.open("Tankprotokoll").sheet1
 
+        print("Frage Tankerkönig ab...")
         response = requests.get(url)
         data = response.json()
         
-        final_preis = None
-        station_name = "WIKING Schleswig"
-
         if data.get("ok") and len(data.get("stations", [])) > 0:
-            station_data = data["stations"][0]
-            final_preis = station_data.get("price")
-            if station_data.get("name"):
-                station_name = station_data.get("name")
-
-        # DER RETTUNGS-ANKER: Wenn Preis leer (None) oder 0 ist
-        if not final_preis or final_preis == 0:
-            print("Kein aktueller Preis. Suche letzten gültigen Wert...")
-            all_values = sheet.get_all_values()
-            
-            letzter_preis = "Warten..."
-            for row in reversed(all_values):
-                # Wir suchen in Spalte D (Index 3) nach der letzten echten Zahl
-                if len(row) >= 4 and row[3] not in ["", "Bestpreis", "Warten...", "None", None]:
-                    letzter_preis = row[3]
+            # Wir suchen gezielt nach "WIKING", wenn nicht gefunden, nehmen wir die nächstbeste
+            ziel_station = None
+            for station in data["stations"]:
+                if "WIKING" in station.get("name", "").upper():
+                    ziel_station = station
                     break
             
-            final_preis = letzter_preis
-
-        # Eintragen
-        zeile = [zeit_jetzt, "24837", "e5", final_preis, "", "", "🤖 Auto-Sauger", station_name]
-        sheet.append_row(zeile)
-        print(f"Erfolg: Preis {final_preis} eingetragen.")
+            # Falls WIKING nicht in der Liste ist, nehmen wir die erste Station
+            if not ziel_station:
+                ziel_station = data["stations"][0]
+                print(f"WIKING nicht gefunden, nutze Alternative: {ziel_station.get('name')}")
+            
+            station_name = ziel_station.get("name")
+            
+            # Preise auslesen (kann None sein, wenn die Sorte nicht angeboten wird)
+            preise = {
+                "e5": ziel_station.get("e5"),
+                "e10": ziel_station.get("e10"),
+                "diesel": ziel_station.get("diesel")
+            }
+            
+            # Für jede Sorte eine eigene Zeile anlegen
+            for sorte, preis in preise.items():
+                if preis: # Nur eintragen, wenn es auch einen Preis gibt
+                    zeile = [zeit_jetzt, "24837", sorte, preis, "", "", "🤖 Auto-Sauger", station_name]
+                    sheet.append_row(zeile)
+                    print(f"Erfolg: {sorte.upper()} für {preis}€ bei {station_name} eingetragen.")
+        else:
+            print("Fehler: Keine Stationen gefunden oder API-Limit erreicht.")
 
     except Exception as e:
-        print(f"Fehler: {e}")
+        print(f"Fehler beim Ausführen: {e}")
 
 if __name__ == "__main__":
     run_sauger()
