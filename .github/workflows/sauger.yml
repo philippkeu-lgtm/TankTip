@@ -2,7 +2,8 @@ name: Automatischer Tank-Sauger
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # Startet jetzt immer um 7 Minuten nach der vollen Stunde (z.B. 14:07, 15:07)
+    - cron: '7 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -10,12 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Python einrichten
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
       - name: Bibliotheken installieren
         run: pip install requests gspread oauth2client pytz
+        
       - name: Sauger starten
         env:
           TANKERKOENIG_API_KEY: ${{ secrets.TANKERKOENIG_API_KEY }}
