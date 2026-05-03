@@ -93,6 +93,7 @@ def hole_tankstellen(lat, lng, rad, sorte):
     try: return requests.get(url, timeout=10).json().get("stations", [])
     except: return []
 
+# --- NEUE, INTELLIGENTE NEWS-FUNKTION ---
 def ki_news_check():
     if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt für die News-Analyse."
     try:
@@ -101,34 +102,54 @@ def ki_news_check():
         feed = feedparser.parse(resp.content)
         if not feed.entries: return "NEUTRAL", "Keine aktuellen News abrufbar."
         
-        headlines = " ".join([e.title for e in feed.entries[:10]])
+        headlines = " ".join([e.title for e in feed.entries[:15]])
         genai.configure(api_key=GM_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        res = model.generate_content(f"Analysiere diese Schlagzeilen kurz: {headlines}. Antworte NUR mit FALLEND, STEIGEND oder STABIL.").text.strip().upper()
+        prompt = f"""
+        Hier sind die aktuellen Finanz-Schlagzeilen: {headlines}
+        Gibt es darin wichtige News, die den globalen Ölpreis beeinflussen könnten?
+        Antworte EXAKT in diesem Format: TREND|GRUND
+        - 'TREND' darf nur FALLEND, STEIGEND oder NEUTRAL sein.
+        - 'GRUND' ist ein extrem kurzer Satz (max 10 Worte), der genau sagt, was passiert. Wenn nichts Relevantes passiert, schreibe 'Keine besonderen Öl-Ereignisse'.
+        """
         
-        if "FALLEND" in res: return "FALLEND", "Die globalen Öl-News deuten auf fallende Kurse hin."
-        if "STEIGEND" in res: return "STEIGEND", "Die Nachrichtenlage deutet auf baldige Preissteigerungen hin."
-        return "NEUTRAL", "Die aktuelle Nachrichtenlage zum Ölmarkt ist stabil."
-    except: return "NEUTRAL", "News-Scanner lädt im Hintergrund."
+        res = model.generate_content(prompt).text.strip()
+        teile = res.split("|")
+        
+        if len(teile) == 2:
+            trend = teile[0].strip().upper()
+            grund = teile[1].strip()
+            
+            if trend == "STEIGEND": return "STEIGEND", f"{grund}."
+            elif trend == "FALLEND": return "FALLEND", f"{grund}."
+            else: return "NEUTRAL", "Aktuell keine extremen Meldungen am Ölmarkt."
+        else:
+            return "NEUTRAL", "Nachrichtenlage ist aktuell stabil."
+            
+    except Exception as e: 
+        return "NEUTRAL", "News-Scanner lädt im Hintergrund."
 
 # --- HAUPT-ANSICHT (ZENTRIERT) ---
-st.title("⛽ TankTroll AI")
-st.markdown("Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.")
-st.write("") # Etwas Abstand
 
-# Prominente Eingabefelder direkt im Blickfeld
+# !!! HIER WIRD DAS BILD EINGEFÜGT !!!
+# Wenn du ein eigenes Bild in GitHub hast (z.B. logo.png), ändere den Text in den Anführungszeichen einfach zu "logo.png"
+st.image("https://cdn-icons-png.flaticon.com/512/8157/8157833.png", width=100) 
+
+st.title("TankTroll AI")
+st.markdown("Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.")
+st.write("") 
+
 col1, col2 = st.columns(2)
 with col1:
     ort_in = st.text_input("📍 PLZ (z.B. 24837) eingeben:", "24837")
 with col2:
     srt_in = st.selectbox("⛽ Kraftstoff wählen:", ["e5", "e10", "diesel"])
 
-st.write("") # Etwas Abstand
+st.write("") 
 
-# Großer Start-Button
 if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
-    with st.spinner("Lade Live-Preise und TimesFM-Prognose..."):
+    with st.spinner("Lade Live-Preise, News und TimesFM-Prognose..."):
         lat, lng = hole_koordinaten(ort_in)
         if lat is None or lng is None:
             st.error(f"❌ Fehler: Konnte keine Koordinaten für '{ort_in}' finden.")
@@ -144,7 +165,6 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
         if stationen:
             best = stationen[0]
             
-            # --- KI BERECHNUNG (Kurzfristig für heute) ---
             ki_ziel, ki_msg = hole_echte_ki_daten(srt_in)
             if ki_ziel is None:
                 ki_ziel = best['price'] - 0.04
@@ -157,14 +177,14 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
             status_txt = "JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"
             zeit_txt = "⏳ Optimales Fenster: SOFORT" if jetzt else "⏳ Prognose: Preis fällt heute voraussichtlich noch"
             
-            # --- NEWS INFOBOX (Langfristig für die nächsten Tage) ---
+            # --- NEWS INFOBOX ---
             trend, news_msg = ki_news_check()
             if trend == "STEIGEND":
-                st.warning(f"📈 **Langfrist-Trend:** {news_msg} (Es könnte schlau sein, bald vollzutanken, bevor die Preise generell steigen.)")
+                st.warning(f"📈 **Langfrist-Trend:** {news_msg} (Bald volltanken könnte schlau sein.)")
             elif trend == "FALLEND":
-                st.success(f"📉 **Langfrist-Trend:** {news_msg} (Die Tendenz für die nächsten Tage zeigt eher nach unten.)")
+                st.success(f"📉 **Langfrist-Trend:** {news_msg} (Die Tendenz zeigt eher nach unten.)")
             else:
-                st.info(f"⚖️ **Langfrist-Trend:** {news_msg} (Keine extremen Preissprünge für die nächsten Tage erwartet.)")
+                st.info(f"⚖️ **Langfrist-Trend:** {news_msg}")
 
             # --- STATUS KARTE ---
             st.markdown(f"""
@@ -189,7 +209,7 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
             fig.update_layout(height=300, margin=dict(t=50, b=10))
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- KASSENBON (Jetzt nur noch mit den echten Daten!) ---
+            # --- KASSENBON ---
             drop_color = "green" if basis_drop < 0 else "red"
             html_kassenbon = (
                 f'<div class="analyse-box">'
