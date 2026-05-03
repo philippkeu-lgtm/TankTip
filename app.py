@@ -131,14 +131,13 @@ def ki_news_check():
 
 # --- HAUPT-ANSICHT (ZENTRIERT) ---
 
-# Hier wird dein eigenes Logo geladen!
 try:
-    st.image("TankTip.png", width=120) 
+    st.image("TankTip.png", use_container_width=True) 
 except:
-    pass # Falls das Bild noch nicht hochgeladen wurde, stürzt die App nicht ab
+    st.title("TankTip")
 
-st.title("TankTip")
-st.markdown("Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.")
+# Hier kannst du den Untertitel anpassen oder die Zeile löschen, falls dein Banner schon Text hat
+st.markdown("<h4 style='text-align: center; color: gray;'>Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.</h4>", unsafe_allow_html=True)
 st.write("") 
 
 col1, col2 = st.columns(2)
