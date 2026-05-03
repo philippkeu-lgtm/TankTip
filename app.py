@@ -19,17 +19,15 @@ if hasattr(ssl, '_create_unverified_context'):
     ssl._create_default_https_context = ssl._create_unverified_context
 
 # --- INITIALISIERUNG ---
+st.set_page_config(page_title="TankTroll - KI Radar", page_icon="⛽", layout="centered")
 load_dotenv() 
 
-# Lade API-Keys (aus .env lokal oder aus Streamlit Secrets)
 def hole_secret(key):
     try: return st.secrets[key]
     except: return os.getenv(key)
 
 TK_KEY = hole_secret("TANKERKOENIG_API_KEY")
 GM_KEY = hole_secret("GEMINI_API_KEY")
-
-st.set_page_config(page_title="TankTroll - KI Radar", page_icon="⛽", layout="wide")
 
 # --- UI DESIGN ---
 st.markdown("""
@@ -57,25 +55,21 @@ def hole_gcp_creds():
 
 def hole_echte_ki_daten(sorte):
     creds_dict = hole_gcp_creds()
-    if not creds_dict: return None, "Keine Google-Verbindung (Secret fehlt)"
-    
+    if not creds_dict: return None, "Keine Google-Verbindung"
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open("Tankprotokoll").sheet1
-        
         daten = sheet.get_all_values() 
-        # Gehe die Tabelle rückwärts durch, um den neusten Eintrag zu finden
         for row in reversed(daten):
-            # Prüfe ob Zeile lang genug ist und die Sorte (Spalte C / Index 2) stimmt
             if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
                 ki_wert = str(row[4]).strip().replace(',', '.')
                 if ki_wert and ki_wert != "Warten...":
-                    return float(ki_wert), "Erfolgreich aus Google Sheet geladen"
-        return None, "Noch keine TimesFM Daten in Spalte E gefunden"
+                    return float(ki_wert), "TimesFM Daten live aus Google Sheet"
+        return None, "Noch keine TimesFM Daten gefunden"
     except Exception as e:
-        return None, f"Fehler beim Laden: {str(e)}"
+        return None, f"Ladefehler: {str(e)}"
 
 def hole_koordinaten(ort):
     try:
@@ -100,39 +94,41 @@ def hole_tankstellen(lat, lng, rad, sorte):
     except: return []
 
 def ki_news_check():
-    if not GM_KEY: return 0.0, "KI-Modell nicht konfiguriert."
+    if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt für die News-Analyse."
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         resp = requests.get("https://finance.yahoo.com/news/rssindex", headers=headers, timeout=5)
         feed = feedparser.parse(resp.content)
-        if not feed.entries: return 0.0, "Keine aktuellen News abrufbar."
+        if not feed.entries: return "NEUTRAL", "Keine aktuellen News abrufbar."
         
         headlines = " ".join([e.title for e in feed.entries[:10]])
         genai.configure(api_key=GM_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         res = model.generate_content(f"Analysiere diese Schlagzeilen kurz: {headlines}. Antworte NUR mit FALLEND, STEIGEND oder STABIL.").text.strip().upper()
-        if "FALLEND" in res: return -0.04, "Globale News deuten auf fallende Kurse hin."
-        if "STEIGEND" in res: return 0.03, "Nachrichtenlage deutet auf Preissteigerungen hin."
-        return 0.0, "Nachrichtenlage ist neutral."
-    except: return 0.0, "News-Scanner Offline."
+        
+        if "FALLEND" in res: return "FALLEND", "Die globalen Öl-News deuten auf fallende Kurse hin."
+        if "STEIGEND" in res: return "STEIGEND", "Die Nachrichtenlage deutet auf baldige Preissteigerungen hin."
+        return "NEUTRAL", "Die aktuelle Nachrichtenlage zum Ölmarkt ist stabil."
+    except: return "NEUTRAL", "News-Scanner lädt im Hintergrund."
 
-# --- UI SIDEBAR ---
-st.sidebar.title("⛽ TankTroll AI")
-oel = hole_marktpreis("BZ=F")
-if oel: st.sidebar.metric("Ölpreis (Brent)", f"{oel} $")
-ort_in = st.sidebar.text_input("📍 PLZ / Ort", "24837")
-srt_in = st.sidebar.selectbox("Kraftstoff", ["e5", "e10", "diesel"])
+# --- HAUPT-ANSICHT (ZENTRIERT) ---
+st.title("⛽ TankTroll AI")
+st.markdown("Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.")
+st.write("") # Etwas Abstand
 
-st.sidebar.divider()
-st.sidebar.markdown("### 🔧 System-Diagnose")
-st.sidebar.success("✅ Tankerkönig API") if TK_KEY else st.sidebar.error("❌ Tankerkönig API")
-st.sidebar.success("✅ Gemini API") if GM_KEY else st.sidebar.warning("⚠️ Gemini API fehlt")
-st.sidebar.success("✅ Google Sheets verknüpft") if hole_gcp_creds() else st.sidebar.error("❌ Google Sheets Secret fehlt")
+# Prominente Eingabefelder direkt im Blickfeld
+col1, col2 = st.columns(2)
+with col1:
+    ort_in = st.text_input("📍 PLZ (z.B. 24837) eingeben:", "24837")
+with col2:
+    srt_in = st.selectbox("⛽ Kraftstoff wählen:", ["e5", "e10", "diesel"])
 
-# --- HAUPTBEREICH ---
-if st.button("🔍 MARKT-ANALYSE STARTEN"):
-    with st.spinner("Lade Live-Preise und TimesFM-Prognose aus Google Sheets..."):
+st.write("") # Etwas Abstand
+
+# Großer Start-Button
+if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
+    with st.spinner("Lade Live-Preise und TimesFM-Prognose..."):
         lat, lng = hole_koordinaten(ort_in)
         if lat is None or lng is None:
             st.error(f"❌ Fehler: Konnte keine Koordinaten für '{ort_in}' finden.")
@@ -140,7 +136,7 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
             
         roh_stationen = hole_tankstellen(lat, lng, 5, srt_in)
         if not roh_stationen:
-            st.warning("⚠️ Tankerkönig liefert eine leere Liste.")
+            st.warning("⚠️ Tankerkönig liefert aktuell eine leere Liste.")
             st.stop()
 
         stationen = sorted([s for s in roh_stationen if s.get('price')], key=lambda x: x['price'])
@@ -148,28 +144,29 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
         if stationen:
             best = stationen[0]
             
-            # --- HIER PASSIERT DIE MAGIE: WIR FRAGEN DEIN SHEET ---
-            ki_basis_ziel, ki_msg = hole_echte_ki_daten(srt_in)
-            
-            # Fallback, falls die KI noch keine Daten gesammelt hat
-            if ki_basis_ziel is None:
-                ki_basis_ziel = best['price'] - 0.04
+            # --- KI BERECHNUNG (Kurzfristig für heute) ---
+            ki_ziel, ki_msg = hole_echte_ki_daten(srt_in)
+            if ki_ziel is None:
+                ki_ziel = best['price'] - 0.04
                 ki_msg = "TimesFM sammelt noch... (Standardwert wird genutzt)"
                 
-            basis_drop = ki_basis_ziel - best['price']
-            
-            news_delta, news_msg = ki_news_check()
-            ki_ziel = ki_basis_ziel + news_delta
-            
+            basis_drop = ki_ziel - best['price']
             jetzt = best['price'] <= (ki_ziel + 0.01)
+            
             status_cls = "tanken-jetzt" if jetzt else "warten-später"
             status_txt = "JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"
+            zeit_txt = "⏳ Optimales Fenster: SOFORT" if jetzt else "⏳ Prognose: Preis fällt heute voraussichtlich noch"
             
-            if jetzt:
-                zeit_txt = "⏳ Optimales Fenster: SOFORT (Laut TimesFM)"
+            # --- NEWS INFOBOX (Langfristig für die nächsten Tage) ---
+            trend, news_msg = ki_news_check()
+            if trend == "STEIGEND":
+                st.warning(f"📈 **Langfrist-Trend:** {news_msg} (Es könnte schlau sein, bald vollzutanken, bevor die Preise generell steigen.)")
+            elif trend == "FALLEND":
+                st.success(f"📉 **Langfrist-Trend:** {news_msg} (Die Tendenz für die nächsten Tage zeigt eher nach unten.)")
             else:
-                zeit_txt = "⏳ Prognose: Preis fällt voraussichtlich noch"
-            
+                st.info(f"⚖️ **Langfrist-Trend:** {news_msg} (Keine extremen Preissprünge für die nächsten Tage erwartet.)")
+
+            # --- STATUS KARTE ---
             st.markdown(f"""
             <div class="empfehlung-card {status_cls}">
                 <div style="text-transform: uppercase; letter-spacing: 2px;">KI Strategie-Modell (TimesFM)</div>
@@ -192,17 +189,14 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
             fig.update_layout(height=300, margin=dict(t=50, b=10))
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- KASSENBON ---
+            # --- KASSENBON (Jetzt nur noch mit den echten Daten!) ---
             drop_color = "green" if basis_drop < 0 else "red"
-            news_color = "green" if news_delta < 0 else "red" if news_delta > 0 else "#888"
-            
             html_kassenbon = (
                 f'<div class="analyse-box">'
-                f'<div class="accuracy-badge">🎯 Lokale Google TimesFM-Daten: {ki_msg}</div>'
+                f'<div class="accuracy-badge">🎯 {ki_msg}</div>'
                 f'<div class="rechenweg-zeile"><span>1. Aktueller Bestpreis im Radius ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>'
-                f'<div class="rechenweg-zeile" style="color: {drop_color};"><span>2. TimesFM Prognose (Schleswig-Muster)</span><span>{basis_drop*100:+.1f} ct</span></div>'
-                f'<div class="rechenweg-zeile" style="color: {news_color};"><span>3. Globale News-Korrektur</span><span>{news_delta*100:+.1f} ct</span></div>'
-                f'<div class="rechenweg-zeile"><span>= Berechnetes KI-Ziel</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>'
+                f'<div class="rechenweg-zeile" style="color: {drop_color};"><span>2. Google TimesFM Prognose (Tages-Drop)</span><span>{basis_drop*100:+.1f} ct</span></div>'
+                f'<div class="rechenweg-zeile"><span>= Berechnetes KI-Ziel für heute</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>'
                 f'</div>'
             )
             st.markdown(html_kassenbon, unsafe_allow_html=True)
@@ -213,3 +207,16 @@ if st.button("🔍 MARKT-ANALYSE STARTEN"):
                 c = "#28a745" if i == 0 else "#ffc107" if i == 1 else "#dc3545"
                 mast += f'<div class="mast-row"><div><b>{s["brand"]}</b><br><small>{s.get("dist")} km</small></div><div style="color:{c}; font-size: 1.8rem; font-weight: bold;">{s["price"]:.3f}</div></div>'
             st.markdown(mast + '</div>', unsafe_allow_html=True)
+
+# --- VERSTECKTE SYSTEM-DIAGNOSE ---
+st.write("---")
+with st.expander("🔧 Entwickler: System-Status & API Diagnose"):
+    if TK_KEY: st.success("✅ Tankerkönig API aktiv")
+    else: st.error("❌ Tankerkönig API fehlt")
+    if GM_KEY: st.success("✅ Gemini API aktiv")
+    else: st.warning("⚠️ Gemini API fehlt")
+    if hole_gcp_creds(): st.success("✅ Google Sheets verknüpft")
+    else: st.error("❌ Google Sheets Secret fehlt")
+    
+    oel = hole_marktpreis("BZ=F")
+    if oel: st.metric("Globaler Ölpreis (Brent)", f"{oel} $")
