@@ -137,7 +137,7 @@ except:
     st.title("TankTip")
 
 # Hier kannst du den Untertitel anpassen oder die Zeile löschen, falls dein Banner schon Text hat
-st.markdown("<h4 style='text-align: center; color: gray;'>Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align: center; color: gray;'>Moin! Lass uns gemeinsam den besten Zeitpunkt zum Tanken finden.</h4>", unsafe_allow_html=True)
 st.write("") 
 
 col1, col2 = st.columns(2)
