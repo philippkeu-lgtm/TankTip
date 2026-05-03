@@ -19,7 +19,7 @@ if hasattr(ssl, '_create_unverified_context'):
     ssl._create_default_https_context = ssl._create_unverified_context
 
 # --- INITIALISIERUNG ---
-st.set_page_config(page_title="TankTroll - KI Radar", page_icon="⛽", layout="centered")
+st.set_page_config(page_title="TankTip - KI Radar", page_icon="⛽", layout="centered")
 load_dotenv() 
 
 def hole_secret(key):
@@ -79,7 +79,7 @@ def hole_koordinaten(ort):
             if resp.status_code == 200:
                 data = resp.json()
                 return float(data['places'][0]['latitude']), float(data['places'][0]['longitude'])
-        loc = Nominatim(user_agent="tanktroll_pro_v1").geocode(f"{ort}, Deutschland", timeout=10)
+        loc = Nominatim(user_agent="tanktip_pro_v1").geocode(f"{ort}, Deutschland", timeout=10)
         return (loc.latitude, loc.longitude) if loc else (None, None)
     except: return None, None
 
@@ -93,7 +93,6 @@ def hole_tankstellen(lat, lng, rad, sorte):
     try: return requests.get(url, timeout=10).json().get("stations", [])
     except: return []
 
-# --- NEUE, INTELLIGENTE NEWS-FUNKTION ---
 def ki_news_check():
     if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt für die News-Analyse."
     try:
@@ -132,11 +131,13 @@ def ki_news_check():
 
 # --- HAUPT-ANSICHT (ZENTRIERT) ---
 
-# !!! HIER WIRD DAS BILD EINGEFÜGT !!!
-# Wenn du ein eigenes Bild in GitHub hast (z.B. logo.png), ändere den Text in den Anführungszeichen einfach zu "logo.png"
-st.image("https://cdn-icons-png.flaticon.com/512/8157/8157833.png", width=100) 
+# Hier wird dein eigenes Logo geladen!
+try:
+    st.image("TankTip.png", width=120) 
+except:
+    pass # Falls das Bild noch nicht hochgeladen wurde, stürzt die App nicht ab
 
-st.title("TankTroll AI")
+st.title("TankTip")
 st.markdown("Dein persönlicher KI-Radar für den besten Tank-Zeitpunkt.")
 st.write("") 
 
