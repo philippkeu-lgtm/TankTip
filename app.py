@@ -1,351 +1,218 @@
 import streamlit as st
-from supabase import create_client
-from PIL import Image
-import io
+import requests
+import yfinance as yf
 import google.generativeai as genai
+import pandas as pd
+import feedparser
+import os
+import ssl
 import json
-import base64
-import time
+import plotly.graph_objects as go
+from datetime import datetime
+from dotenv import load_dotenv
+from geopy.geocoders import Nominatim
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-# --- 1. SEITEN-KONFIGURATION ---
-st.set_page_config(page_title="Die Schatzkiste", layout="wide", page_icon="💎")
+# --- FIX FÜR SERVER-SICHERHEIT ---
+if hasattr(ssl, '_create_unverified_context'):
+    ssl._create_default_https_context = ssl._create_unverified_context
 
-# --- 2. DAS GEHEIMNISVOLLE PORTAL (PASSWÖRTER) ---
-# Hier sind die geheimen Passwörter
-GEHEIME_PASSWOERTER = ["Drachenfeuer", "Zauberstab", "Feenstaub", "Piratengold", "Ritterburg"]
+# --- INITIALISIERUNG ---
+st.set_page_config(page_title="TankTip - KI Radar", page_icon="⛽", layout="centered")
+load_dotenv() 
 
-if "eingeloggt" not in st.session_state:
-    st.session_state.eingeloggt = False
+def hole_secret(key):
+    try: return st.secrets[key]
+    except: return os.getenv(key)
 
-if not st.session_state.eingeloggt:
-    st.markdown("<h1 style='text-align: center; font-family: \"Press Start 2P\", monospace; color: #4a2e15; margin-top: 50px;'>Das Geheime Portal</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 24px;'>Sprich das geheime Losungswort, um die Schatzkiste zu öffnen!</p>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        passwort_eingabe = st.text_input("Losungswort:", type="password")
-        if st.button("🚪 EINTRETEN 🚪"):
-            if passwort_eingabe in GEHEIME_PASSWOERTER:
-                st.session_state.eingeloggt = True
-                st.rerun()
-            else:
-                st.error("Falsches Losungswort! Das Portal bleibt verschlossen.")
-    
-    st.stop()
+TK_KEY = hole_secret("TANKERKOENIG_API_KEY")
+GM_KEY = hole_secret("GEMINI_API_KEY")
 
-# --- 3. VERBINDUNGEN (Supabase & Gemini KI) ---
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase = create_client(url, key)
-
-gemini_key = st.secrets["GEMINI_API_KEY"]
-genai.configure(api_key=gemini_key)
-model = genai.GenerativeModel('gemini-2.5-flash') 
-
-# WICHTIG: Projekt-ID eintragen!
-PROJEKT_ID = "hlfaeckobtfkwywrmpgt" 
-
-# --- HILFSFUNKTION FÜR BILDER ---
-@st.cache_data
-def get_transparent_egg(file_path):
-    try:
-        img = Image.open(file_path).convert("RGBA")
-        datas = img.getdata()
-        new_data = []
-        for item in datas:
-            if item[0] > 190 and item[1] > 200 and item[2] > 210:
-                new_data.append((255, 255, 255, 0))
-            else:
-                new_data.append(item)
-        img.putdata(new_data)
-        
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode()
-    except FileNotFoundError:
-        return None
-
-ei_base64 = get_transparent_egg("ei.png")
-
-# --- 4. HEADER BILD ---
-try:
-    st.image("hintergrund.png", use_container_width=True)
-except:
-    pass 
-
-# --- 5. CSS DESIGN (KINDGERECHT & RESPONSIVE FÜR HANDYS) ---
-st.markdown(f"""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
-
-    .stApp {{ background-color: #e8d5b5; }}
-
-    @keyframes pulsieren {{
-        0% {{ transform: scale(1); filter: drop-shadow(0 0 5px rgba(0,0,0,0.2)); }}
-        50% {{ transform: scale(1.1); filter: drop-shadow(0 0 25px rgba(255,215,0,1)); }}
-        100% {{ transform: scale(1); filter: drop-shadow(0 0 5px rgba(0,0,0,0.2)); }}
-    }}
-
-    .magisches-ei {{
-        display: block; margin-left: auto; margin-right: auto;
-        width: 160px; animation: pulsieren 2.5s infinite ease-in-out;
-        image-rendering: pixelated; margin-bottom: 25px;
-    }}
-
-    /* --- PC STANDARD GRÖSSEN --- */
-    h1, h2, h3 {{
-        font-family: 'Press Start 2P', monospace !important;
-        color: #4a2e15 !important; text-align: center;
-        text-shadow: 2px 2px 0px #c5a070;
-        line-height: 1.4 !important;
-    }}
-
-    p, label {{
-        font-family: 'VT323', monospace !important; font-size: 28px !important; color: #2e1a0f;
-    }}
-
-    /* --- FIX: NAMENS-AUSWAHLBOX (SICHER & LESBAR) --- */
-    div[data-baseweb="select"] > div {{
-        background-color: #fff8e7 !important;
-        border: 4px solid #4a2e15 !important;
-        border-radius: 10px !important;
-    }}
-    div[data-baseweb="select"] span {{
-        color: #4a2e15 !important; 
-        font-family: 'VT323', monospace !important;
-        font-size: 32px !important;
-    }}
-    /* Das Aufklapp-Menü */
-    ul[data-baseweb="menu"] {{
-        background-color: #fff8e7 !important;
-        border: 4px solid #4a2e15 !important;
-    }}
-    ul[data-baseweb="menu"] li {{
-        background-color: #fff8e7 !important;
-    }}
-    ul[data-baseweb="menu"] li span {{
-        color: #4a2e15 !important;
-        font-family: 'VT323', monospace !important;
-        font-size: 28px !important;
-    }}
-
-    /* HAUPT-BUTTONS (Schatz in Kiste legen etc.) */
-    div.stButton > button:first-child {{
-        background-color: #FF4500 !important; color: white !important;
-        font-family: 'Press Start 2P', monospace !important; font-size: 18px !important;
-        padding: 30px !important; border: 8px solid #4a2e15 !important;
-        border-radius: 15px !important; width: 100% !important;
-        box-shadow: 8px 8px 0px 0px #4a2e15 !important;
-    }}
-    
-    /* KAMERA RAHMEN & BUTTONS */
-    [data-testid="stCameraInput"] {{
-        border: 10px solid #FF4500 !important; border-radius: 15px !important;
-        background-color: #fff8e7; box-shadow: 8px 8px 0px #4a2e15;
-        padding: 10px !important; margin-top: 20px !important;
-    }}
-
-    [data-testid="stCameraInput"] button {{
-        background-color: #FF0000 !important; color: white !important; 
-        border: 6px solid #4a2e15 !important; border-radius: 40px !important; 
-        height: 80px !important; font-family: 'VT323', monospace !important; 
-        font-size: 35px !important; margin-top: 10px !important; 
-        box-shadow: 4px 4px 0px #4a2e15 !important;
-    }}
-
-    [data-testid="stCameraInput"] button[title="Clear photo"],
-    [data-testid="stCameraInput"] button:nth-of-type(2) {{
-        background-color: #4a2e15 !important; color: white !important;
-        border-radius: 10px !important; height: 50px !important;
-        font-size: 20px !important; box-shadow: none !important;
-        border: 4px solid #2e1a0f !important;
-    }}
-
-    /* --- SMARTPHONE ANPASSUNG (Media Query) --- */
-    @media (max-width: 768px) {{
-        h1 {{ font-size: 22px !important; }}
-        h2 {{ font-size: 18px !important; }}
-        h3 {{ font-size: 14px !important; }}
-        
-        p, label {{ font-size: 22px !important; }}
-        
-        div[data-baseweb="select"] span {{ font-size: 26px !important; }}
-        
-        div[data-testid="stVerticalBlock"] > div > div {{
-            padding: 10px !important;
-        }}
-    }}
-    </style>
+# --- UI DESIGN (CSS) ---
+st.markdown("""
+<style>
+    .empfehlung-card { padding: 25px 20px; border-radius: 12px; text-align: center; margin-bottom: 25px; border: 3px solid #333; }
+    .tanken-jetzt { background-color: #28a745; color: white; border-color: #1e7e34; }
+    .warten-später { background-color: #ffc107; color: #333; border-color: #d39e00; }
+    .zeit-pill { display: inline-block; background: rgba(0,0,0,0.15); padding: 8px 20px; border-radius: 30px; font-size: 1.1rem; font-weight: bold; margin-top: 15px; border: 1px solid rgba(255,255,255,0.3); }
+    .analyse-box { background-color: #f8f9fa; border-left: 5px solid #00fbff; padding: 20px; border-radius: 8px; margin-bottom: 20px; color: #333; }
+    .rechenweg-zeile { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #ccc; font-family: monospace; }
+    .rechenweg-zeile:last-child { border-bottom: none; font-weight: bold; border-top: 2px solid #333; margin-top: 10px; padding-top: 10px; }
+    .accuracy-badge { display: inline-block; padding: 4px 10px; background-color: #e9ecef; border-radius: 5px; font-size: 0.85rem; color: #495057; margin-bottom: 10px; border: 1px solid #ced4da; }
+    .totem-mast { background: #111; color: white; border-radius: 12px; max-width: 500px; margin: 20px auto; padding: 10px; }
+    .mast-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #333; }
+</style>
 """, unsafe_allow_html=True)
 
-# --- DATEN ABRUFEN ---
-try:
-    response = supabase.table("schaetze").select("*").order("created_at", desc=True).execute()
-    alle_schaetze = response.data
-except:
-    alle_schaetze = []
+# --- FUNKTIONEN ---
+def hole_gcp_creds():
+    gcp_secret = hole_secret("GCP_SERVICE_ACCOUNT")
+    if not gcp_secret: return None
+    try: return json.loads(gcp_secret) if isinstance(gcp_secret, str) else dict(gcp_secret)
+    except: return None
 
-# --- 6. PROFIL & HELDENAUSWAHL ---
-st.title("💎 Schatzkiste")
+def hole_google_sheet_daten():
+    creds_dict = hole_gcp_creds()
+    if not creds_dict: return None
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("Tankprotokoll").sheet1
+        return sheet.get_all_values()
+    except: return None
 
-# Hier ist Philipp nun mit dabei!
-alle_helden = ["Jonne", "Bosse", "Frido", "Philipp"]
-ich_bin = st.selectbox("Wer bist du?", alle_helden)
+def berechne_erfolgsquote(daten, sorte):
+    if not daten or len(daten) < 10: return None, "Noch nicht genug Daten."
+    treffer, total = 0, 0
+    # Spalten laut Screenshot: A:Zeit, C:Sorte, D:Preis, E:KI_Ziel
+    for i in range(1, len(daten) - 10): 
+        row = daten[i]
+        try:
+            if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
+                aktuell = float(str(row[3]).replace(',', '.'))
+                # Nur prüfen, wenn ein Zielpreis in Spalte E steht
+                ziel_str = str(row[4]).strip().replace(',', '.')
+                if not ziel_str or ziel_str == "" or ziel_str == "Warten...": continue
+                
+                ziel = float(ziel_str)
+                if ziel < aktuell: # Die KI hat einen Preisabfall vorhergesagt
+                    total += 1
+                    hit = False
+                    # Prüfen, ob dieser Preis in den nächsten 15 Einträgen erreicht wurde
+                    for j in range(i + 1, min(i + 15, len(daten))):
+                        future_row = daten[j]
+                        if str(future_row[2]).lower() == sorte.lower():
+                            f_preis = float(str(future_row[3]).replace(',', '.'))
+                            if f_preis <= (ziel + 0.005):
+                                hit = True
+                                break
+                    if hit: treffer += 1
+        except: continue
+    if total == 0: return None, "Keine Vorhersagen zum Vergleichen gefunden."
+    return int((treffer / total) * 100), f"{treffer} von {total}"
 
-meine_schaetze = [s for s in alle_schaetze if s.get('entdecker_name') == ich_bin]
+def hole_koordinaten(ort):
+    try:
+        if ort.isdigit() and len(ort) == 5:
+            r = requests.get(f"https://api.zippopotam.us/de/{ort}", timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                return float(d['places'][0]['latitude']), float(d['places'][0]['longitude'])
+        loc = Nominatim(user_agent="tanktip_v5").geocode(f"{ort}, Deutschland")
+        return (loc.latitude, loc.longitude) if loc else (None, None)
+    except: return (None, None)
 
-if ei_base64:
-    st.markdown(f'<img src="data:image/png;base64,{ei_base64}" class="magisches-ei">', unsafe_allow_html=True)
+def hole_marktpreis(ticker):
+    try: return round(yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1], 2)
+    except: return None
 
-# --- QUEST LOGIK ---
-QUEST_KATEGORIE = "Stein"
-QUEST_ZIEL = 3
-bisherige_quest_items = len([s for s in meine_schaetze if s.get('kategorie') == QUEST_KATEGORIE])
-quest_erledigt = bisherige_quest_items >= QUEST_ZIEL
+def hole_tankstellen(lat, lng, rad, sorte):
+    url = f"https://creativecommons.tankerkoenig.de/json/list.php?lat={lat}&lng={lng}&rad={rad}&sort=price&type={sorte}&apikey={TK_KEY}"
+    try: return requests.get(url, timeout=10).json().get("stations", [])
+    except: return []
 
-# --- 7. QUEST-BOARD ---
-st.divider()
+def ki_news_check():
+    if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt."
+    try:
+        r = requests.get("https://finance.yahoo.com/news/rssindex", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        feed = feedparser.parse(r.content)
+        headlines = " ".join([e.title for e in feed.entries[:15]])
+        genai.configure(api_key=GM_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        res = model.generate_content(f"Schlagzeilen: {headlines}. Antworte EXAKT: TREND|GRUND (max 10 Worte Grund).").text.strip().split("|")
+        return (res[0].upper(), res[1]) if len(res) == 2 else ("NEUTRAL", "Markt stabil.")
+    except: return "NEUTRAL", "News laden..."
+
+# --- HAUPT-ANSICHT ---
+try: st.image("TankTip.png", use_container_width=True)
+except: st.title("TankTip")
+
+st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden?</h4>", unsafe_allow_html=True)
+st.write("") 
+
 col1, col2 = st.columns(2)
+with col1: ort_in = st.text_input("📍 PLZ eingeben:", "24837")
+with col2: srt_in = st.selectbox("⛽ Kraftstoff:", ["diesel", "e5", "e10"])
 
-with col1:
-    st.markdown("<div style='border: 6px dashed #4a2e15; padding: 15px; background: #e3f2fd;'>", unsafe_allow_html=True)
-    st.subheader("📜 Wochenaufgabe")
-    if quest_erledigt:
-        st.markdown("✅ **GESCHAFFT!** Du bist ein Meister-Sucher! 🎉")
-    else:
-        st.markdown(f"Finde **{QUEST_ZIEL} Steine**! *(Du hast: {bisherige_quest_items}/{QUEST_ZIEL})*")
-        st.markdown("🎁 **Belohnung:** +100 EP!")
-    st.markdown("</div>", unsafe_allow_html=True)
+if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
+    with st.spinner("KI analysiert Markt und Historie..."):
+        lat, lng = hole_koordinaten(ort_in)
+        if lat:
+            stationen = sorted([s for s in hole_tankstellen(lat, lng, 5, srt_in) if s.get('price')], key=lambda x: x['price'])
+            if stationen:
+                best = stationen[0]
+                sheet_daten = hole_google_sheet_daten()
+                ki_ziel, ki_msg = None, "Standardwert wird genutzt (-4ct)"
+                if sheet_daten:
+                    for row in reversed(sheet_daten):
+                        if len(row) >= 5 and str(row[2]).lower() == srt_in.lower():
+                            val = str(row[4]).strip().replace(',', '.')
+                            if val and val not in ["", "Warten..."]:
+                                try: ki_ziel, ki_msg = float(val), "KI-Daten live aus Google Sheet"; break
+                                except: pass
+                if ki_ziel is None: ki_ziel = best['price'] - 0.04
 
-with col2:
-    st.markdown("<div style='border: 6px dashed #4a2e15; padding: 15px; background: #fff9c4;'>", unsafe_allow_html=True)
-    st.subheader("🏆 Deine XP")
-    meine_xp = sum([s.get('xp', 0) for s in meine_schaetze])
-    st.markdown(f"⭐ **{meine_xp} Erfahrungspunkte**")
-    st.markdown("Das Ei wächst und wächst... 🥚✨")
-    st.markdown("</div>", unsafe_allow_html=True)
+                # STRIKTE LOGIK & ZEIT-TIPP
+                jetzt = best['price'] <= ki_ziel
+                stunde = datetime.now().hour
+                if jetzt: zeit_txt = "⏳ Optimales Fenster: SOFORT"
+                elif stunde < 17: zeit_txt = "⏳ Tipp: Warte auf den Abend (meist ab 18-21 Uhr am günstigsten)"
+                elif 17 <= stunde < 21: zeit_txt = "⏳ Tipp: Preise fallen oft noch bis 21 Uhr. Etwas Geduld!"
+                else: zeit_txt = "⏳ Tipp: Preise ziehen nachts an. Lieber morgen Nachmittag tanken."
 
-# --- 8. FORMULAR: MAGISCHER SCANNER ---
-st.divider()
+                basis_drop = ki_ziel - best['price']
 
-st.markdown("<h1 style='font-size: 30px; text-align: center;'>📸 FOTO MACHEN! 📸</h1>", unsafe_allow_html=True)
+                # UI AUSGABE
+                trend, news_msg = ki_news_check()
+                if trend == "STEIGEND": st.warning(f"📈 **Langfrist-Trend:** {news_msg}")
+                elif trend == "FALLEND": st.success(f"📉 **Langfrist-Trend:** {news_msg}")
+                else: st.info(f"⚖️ **Langfrist-Trend:** {news_msg}")
 
-# Ein kleiner Hinweis zum Umdrehen der Kamera
-st.markdown("<p style='text-align: center; font-size: 22px; color: #4a2e15; background-color: rgba(255,255,255,0.5); border-radius: 10px; padding: 5px;'>🔄 <b>Tipp:</b> Nutze den Knopf oben rechts im Bild, um die Kamera umzudrehen!</p>", unsafe_allow_html=True)
+                st.markdown(f'<div class="empfehlung-card {"tanken-jetzt" if jetzt else "warten-später"}">'
+                            f'<div style="text-transform: uppercase; font-size: 0.9rem;">KI Strategie-Modell</div>'
+                            f'<div style="font-size: 2.5rem; font-weight: 900; margin: 5px 0;">{"JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"}</div>'
+                            f'<div class="zeit-pill">{zeit_txt}</div></div>', unsafe_allow_html=True)
 
-st.markdown("<h2 style='text-align: center; color: #FF0000;'>👇 DRÜCKE DEN ROTEN KNOPF! 👇</h2>", unsafe_allow_html=True)
+                fig = go.Figure(go.Indicator(mode="gauge+number", value=best['price'],
+                    gauge={'axis': {'range': [best['price']-0.1, best['price']+0.1]}, 'bar': {'color': "black"},
+                           'steps': [{'range': [0, ki_ziel], 'color': "#28a745"}, {'range': [ki_ziel, 5], 'color': "#dc3545"}],
+                           'threshold': {'line': {'color': "cyan", 'width': 4}, 'value': ki_ziel}}))
+                fig.update_layout(height=230, margin=dict(t=0, b=0))
+                st.plotly_chart(fig, use_container_width=True)
 
-foto = st.camera_input("")
-
-def process_image(uploaded_file):
-    img = Image.open(uploaded_file).convert("RGB")
-    img.thumbnail((800, 800))
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=70)
-    return buffer.getvalue(), img
-
-if st.button("💎 IN DIE SCHATZKISTE LEGEN 💎"):
-    if foto:
-        with st.spinner("Das Orakel schaut genau hin... 👀✨"):
-            try:
-                img_bytes, pil_image = process_image(foto)
-                
-                ki_prompt = """Du bist ein lustiges magisches Orakel für Kindergarten-Kinder.
-                Analysiere das Bild und antworte NUR im JSON Format: {"kategorie": "...", "seltenheit": "...", "lustiger_name": "..."}
-                Kategorien: Wähle aus (Stein, Holz, Blatt) ODER erfinde Quatsch-Kategorien (Drachenschuppe, Troll-Popel, Feenstaub, Dinosaurierknochen, Piratengold, Alien-Schleim), wenn es komisch aussieht!
-                Lustiger Name: Gib dem Ding einen super lustigen, fantasievollen Namen (z.B. "Glitzernder Matsch-Käfer").
-                Seltenheit: Häufig, Selten, Episch, Legendär."""
-                
-                ki_antwort = model.generate_content([ki_prompt, pil_image])
-                ki_daten = json.loads(ki_antwort.text.replace("```json", "").replace("```", "").strip())
-                
-                kategorie = ki_daten.get("kategorie", "Sonstiges")
-                seltenheit = ki_daten.get("seltenheit", "Häufig")
-                lustiger_name = ki_daten.get("lustiger_name", "Geheimnisvolles Ding")
-                
-                file_name = f"{ich_bin}_{lustiger_name.replace(' ', '_')}_{id(foto)}.jpg"
-                supabase.storage.from_("schatz_bilder").upload(file_name, img_bytes)
-                img_url = f"https://{PROJEKT_ID}.supabase.co/storage/v1/object/public/schatz_bilder/{file_name}"
-                
-                xp_werte = {"Häufig": 10, "Selten": 25, "Episch": 50, "Legendär": 100}
-                punkte = xp_werte.get(seltenheit, 10)
-                
-                wird_quest_jetzt_erledigt = False
-                if kategorie == QUEST_KATEGORIE and bisherige_quest_items + 1 == QUEST_ZIEL:
-                    wird_quest_jetzt_erledigt = True
-                    punkte += 100 
-                
-                schatz_daten = {
-                    "schatz_name": lustiger_name, 
-                    "kategorie": kategorie,
-                    "seltenheit": seltenheit,
-                    "bild_url": img_url,
-                    "entdecker_name": ich_bin,
-                    "xp": punkte
-                }
-                supabase.table("schaetze").insert(schatz_daten).execute()
-                
-                if wird_quest_jetzt_erledigt:
-                    st.snow() 
-                    st.balloons()
-                    st.success(f"🎉 WOCHENAUFGABE GESCHAFFT! Du bekommst fette +{punkte} XP! 🎉")
-                    time.sleep(3)
-                else:
-                    st.balloons()
-                    if seltenheit in ["Episch", "Legendär"]:
-                        st.success(f"WOAAAH! Ein {seltenheit}er Fund! Das ist ein {lustiger_name}! (+{punkte} XP)")
-                    else:
-                        st.success(f"Hihi! Du hast einen '{lustiger_name}' gefunden! (+{punkte} XP)")
-                    time.sleep(2.5)
-                    
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"☠️ Oh nein, der Zauberstab klemmt: {e}")
-    else:
-        st.warning("⚠️ Halt! Du musst erst ein Foto machen! 📸")
-
-# --- 9. DAS INVENTAR ---
-st.divider()
-
-def render_grid(schaetze_liste, tab_name):
-    if not schaetze_liste:
-        st.info("Noch leer. Los, ab nach draußen! 🏃‍♂️💨")
-        return
-
-    cols = st.columns(3) 
-    
-    for index, s in enumerate(schaetze_liste):
-        with cols[index % 3]:
-            farben = {"Häufig": "#8B4513", "Selten": "#4169E1", "Episch": "#9932CC", "Legendär": "#FFD700"}
-            hauptfarbe = farben.get(s.get('seltenheit', 'Häufig'), "#8B4513")
-            
-            st.markdown(f"""
-            <div style="border: 6px solid #4a2e15; padding: 15px; text-align: center; background: #fff8e7; box-shadow: 8px 8px 0px {hauptfarbe}; margin-bottom: 10px;">
-                <h3 style="margin:5px 0 15px 0; font-family: 'Press Start 2P', monospace; font-size: 14px; color: #4a2e15; text-shadow: none;">{s['schatz_name']}</h3>
-                <div style="border: 6px solid #4a2e15; margin-bottom: 15px; background: #000;">
-                    <img src="{s['bild_url']}" style="width: 100%; height: 200px; object-fit: cover; image-rendering: pixelated;">
+                # --- KASSENBON ---
+                drop_color = "green" if basis_drop < 0 else "red"
+                st.markdown(f"""
+                <div class="analyse-box">
+                    <div class="accuracy-badge">🎯 {ki_msg}</div>
+                    <div class="rechenweg-zeile"><span>Bester Preis aktuell ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>
+                    <div class="rechenweg-zeile" style="color: {drop_color};"><span>Erwarteter Tages-Trend</span><span>{basis_drop*100:+.1f} ct</span></div>
+                    <div class="rechenweg-zeile"><span>= Erwarteter Tages-Tiefstpreis</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>
                 </div>
-                <div style="background-color: {hauptfarbe}; color: white; padding: 6px 12px; display: inline-block; font-family: 'Press Start 2P', monospace; font-size: 12px; margin-bottom: 15px; border: 3px solid #4a2e15; text-transform: uppercase;">
-                    {s.get('seltenheit', 'Häufig')} | ⭐ {s.get('xp', 10)} XP
-                </div>
-                <p style="font-size: 24px; color: #2e1a0f; margin: 0; font-weight: bold;">{s.get('kategorie', 'Sonstiges')}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button("🗑️ Wegwerfen", key=f"del_{tab_name}_{s['bild_url']}"):
-                try:
-                    supabase.table("schaetze").delete().eq("bild_url", s['bild_url']).execute()
-                    file_name = s['bild_url'].split("/")[-1]
-                    supabase.storage.from_("schatz_bilder").remove([file_name])
-                    st.rerun()
-                except:
-                    pass
-            st.markdown("<br>", unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-tab_gruppe, tab_ich = st.tabs(["🎒 Alle Schätze", f"🛡️ {ich_bin}s Schätze"])
+                # ERFOLGSQUOTE
+                quote, q_msg = berechne_erfolgsquote(sheet_daten, srt_in)
+                with st.expander("📊 Hat die KI recht? (Erfolgsquote)"):
+                    if quote is not None:
+                        st.metric("Treffsicherheit", f"{quote}%")
+                        st.write(f"Das Muster wurde in **{q_msg}** Fällen korrekt erkannt.")
+                        st.progress(quote / 100)
+                    else: st.info(f"Info: {q_msg} (Prüfe Spalte E in Google Sheets)")
 
-with tab_gruppe:
-    render_grid(alle_schaetze, "alle")
-with tab_ich:
-    render_grid(meine_schaetze, "ich")
+                mast = '<div class="totem-mast">'
+                for i, s in enumerate(stationen[:3]):
+                    c = "#28a745" if i == 0 else "#ffc107" if i == 1 else "#dc3545"
+                    mast += f'<div class="mast-row"><div><b>{s["brand"]}</b><br><small>{s.get("dist")} km</small></div>' \
+                            f'<div style="color:{c}; font-size: 1.6rem; font-weight: bold;">{s["price"]:.3f}</div></div>'
+                st.markdown(mast + '</div>', unsafe_allow_html=True)
+            else: st.error("Keine Tankstellen gefunden.")
+
+# --- FOOTER ---
+st.write("---")
+with st.expander("🛡️ System-Status & Diagnosedaten"):
+    if hole_gcp_creds(): st.success("✅ Google Cloud API verbunden")
+    oel = hole_marktpreis("BZ=F")
+    if oel: st.metric("Globaler Ölpreis (Brent)", f"{oel} $")
