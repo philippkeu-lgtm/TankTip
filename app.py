@@ -8,7 +8,7 @@ import os
 import ssl
 import json
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
 import gspread
@@ -29,20 +29,19 @@ def hole_secret(key):
 TK_KEY = hole_secret("TANKERKOENIG_API_KEY")
 GM_KEY = hole_secret("GEMINI_API_KEY")
 
-# --- UI DESIGN ---
+# --- UI DESIGN (CSS) ---
 st.markdown("""
 <style>
     .empfehlung-card { padding: 25px 20px; border-radius: 12px; text-align: center; margin-bottom: 25px; border: 3px solid #333; }
     .tanken-jetzt { background-color: #28a745; color: white; border-color: #1e7e34; }
     .warten-später { background-color: #ffc107; color: #333; border-color: #d39e00; }
-    .zeit-pill { display: inline-block; background: rgba(0,0,0,0.15); padding: 8px 20px; border-radius: 30px; font-size: 1.3rem; font-weight: bold; margin-top: 15px; border: 1px solid rgba(255,255,255,0.3); }
-    .tanken-jetzt .zeit-pill { background: rgba(255,255,255,0.2); }
-    .analyse-box { background-color: #f8f9fa; border-left: 5px solid #00fbff; padding: 25px; border-radius: 8px; margin-bottom: 30px; color: #333; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-    .rechenweg-zeile { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #ccc; font-family: monospace; font-size: 1.1rem; }
-    .rechenweg-zeile:last-child { border-bottom: none; font-weight: bold; font-size: 1.3rem; border-top: 2px solid #333; margin-top: 10px; padding-top: 10px; }
-    .accuracy-badge { display: inline-block; padding: 5px 12px; background-color: #e9ecef; border-radius: 5px; font-size: 0.9rem; color: #495057; margin-bottom: 15px; border: 1px solid #ced4da; }
+    .zeit-pill { display: inline-block; background: rgba(0,0,0,0.15); padding: 8px 20px; border-radius: 30px; font-size: 1.1rem; font-weight: bold; margin-top: 15px; border: 1px solid rgba(255,255,255,0.3); }
+    .analyse-box { background-color: #f8f9fa; border-left: 5px solid #00fbff; padding: 20px; border-radius: 8px; margin-bottom: 20px; color: #333; }
+    .rechenweg-zeile { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #ccc; font-family: monospace; }
+    .rechenweg-zeile:last-child { border-bottom: none; font-weight: bold; border-top: 2px solid #333; margin-top: 10px; padding-top: 10px; }
+    .accuracy-badge { display: inline-block; padding: 4px 10px; background-color: #e9ecef; border-radius: 5px; font-size: 0.85rem; color: #495057; margin-bottom: 10px; border: 1px solid #ced4da; }
     .totem-mast { background: #111; color: white; border-radius: 12px; max-width: 500px; margin: 20px auto; padding: 10px; }
-    .mast-row { display: flex; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid #333; }
+    .mast-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,52 +64,43 @@ def hole_google_sheet_daten():
     except: return None
 
 def berechne_erfolgsquote(daten, sorte):
-    if not daten: return None, "Keine Datenverbindung"
-    treffer = 0
-    total = 0
-    
-    # Gehe durch die Historie (alt zu neu)
-    for i in range(len(daten) - 5): 
+    if not daten or len(daten) < 10: return None, "Noch nicht genug Daten."
+    treffer, total = 0, 0
+    # Spalten laut Screenshot: A:Zeit, C:Sorte, D:Preis, E:KI_Ziel
+    for i in range(1, len(daten) - 10): 
         row = daten[i]
-        if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
-            try:
-                aktuell_preis = float(str(row[3]).strip().replace(',', '.'))
-                prog_ziel = float(str(row[4]).strip().replace(',', '.'))
+        try:
+            if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
+                aktuell = float(str(row[3]).replace(',', '.'))
+                # Nur prüfen, wenn ein Zielpreis in Spalte E steht
+                ziel_str = str(row[4]).strip().replace(',', '.')
+                if not ziel_str or ziel_str == "" or ziel_str == "Warten...": continue
                 
-                # Wir bewerten nur, wenn die KI gesagt hat: "Preis wird fallen!"
-                if prog_ziel < aktuell_preis:
+                ziel = float(ziel_str)
+                if ziel < aktuell: # Die KI hat einen Preisabfall vorhergesagt
                     total += 1
                     hit = False
-                    lookahead = 0
-                    
-                    # Schau in die Zukunft (die nächsten ca. 12-24 Stunden)
-                    for j in range(i+1, len(daten)):
+                    # Prüfen, ob dieser Preis in den nächsten 15 Einträgen erreicht wurde
+                    for j in range(i + 1, min(i + 15, len(daten))):
                         future_row = daten[j]
-                        if len(future_row) >= 4 and str(future_row[2]).lower() == sorte.lower():
-                            lookahead += 1
-                            future_preis = float(str(future_row[3]).strip().replace(',', '.'))
-                            # Wenn der Preis das Ziel erreicht (oder um max 1 Cent verfehlt) = TREFFER
-                            if future_preis <= prog_ziel + 0.01:
+                        if str(future_row[2]).lower() == sorte.lower():
+                            f_preis = float(str(future_row[3]).replace(',', '.'))
+                            if f_preis <= (ziel + 0.005):
                                 hit = True
                                 break
-                            if lookahead > 24: # Breche die Suche für diesen Tag ab
-                                break
                     if hit: treffer += 1
-            except: pass
-            
-    if total < 5: return None, "Zu wenig historische Daten gesammelt."
-    quote = int((treffer / total) * 100)
-    return quote, f"{treffer} von {total} Vorhersagen"
+        except: continue
+    if total == 0: return None, "Keine Vorhersagen zum Vergleichen gefunden."
+    return int((treffer / total) * 100), f"{treffer} von {total}"
 
 def hole_koordinaten(ort):
     try:
-        ort = str(ort).strip()
         if ort.isdigit() and len(ort) == 5:
-            resp = requests.get(f"https://api.zippopotam.us/de/{ort}", timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                return float(data['places'][0]['latitude']), float(data['places'][0]['longitude'])
-        loc = Nominatim(user_agent="tanktip_pro_v4").geocode(f"{ort}, Deutschland", timeout=10)
+            r = requests.get(f"https://api.zippopotam.us/de/{ort}", timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                return float(d['places'][0]['latitude']), float(d['places'][0]['longitude'])
+        loc = Nominatim(user_agent="tanktip_v4").geocode(f"{ort}, Deutschland")
         return (loc.latitude, loc.longitude) if loc else (None, None)
     except: return (None, None)
 
@@ -124,162 +114,96 @@ def hole_tankstellen(lat, lng, rad, sorte):
     except: return []
 
 def ki_news_check():
-    if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt für die News-Analyse."
+    if not GM_KEY: return "NEUTRAL", "Gemini-API fehlt."
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        resp = requests.get("https://finance.yahoo.com/news/rssindex", headers=headers, timeout=5)
-        feed = feedparser.parse(resp.content)
-        if not feed.entries: return "NEUTRAL", "Keine aktuellen News abrufbar."
-        
+        r = requests.get("https://finance.yahoo.com/news/rssindex", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        feed = feedparser.parse(r.content)
         headlines = " ".join([e.title for e in feed.entries[:15]])
         genai.configure(api_key=GM_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"""
-        Hier sind die aktuellen Finanz-Schlagzeilen: {headlines}
-        Gibt es darin wichtige News, die den globalen Ölpreis beeinflussen könnten?
-        Antworte EXAKT in diesem Format: TREND|GRUND
-        - 'TREND' darf nur FALLEND, STEIGEND oder NEUTRAL sein.
-        - 'GRUND' ist ein extrem kurzer Satz (max 10 Worte), der genau sagt, was passiert.
-        """
-        
-        res = model.generate_content(prompt).text.strip()
-        teile = res.split("|")
-        
-        if len(teile) == 2:
-            trend, grund = teile[0].strip().upper(), teile[1].strip()
-            if trend == "STEIGEND": return "STEIGEND", f"{grund}."
-            elif trend == "FALLEND": return "FALLEND", f"{grund}."
-            else: return "NEUTRAL", "Aktuell keine extremen Meldungen am Ölmarkt."
-        return "NEUTRAL", "Nachrichtenlage ist aktuell stabil."
-    except: return "NEUTRAL", "News-Scanner lädt im Hintergrund."
+        res = model.generate_content(f"Schlagzeilen: {headlines}. Antworte EXAKT: TREND|GRUND (max 10 Worte Grund).").text.strip().split("|")
+        return (res[0].upper(), res[1]) if len(res) == 2 else ("NEUTRAL", "Markt stabil.")
+    except: return "NEUTRAL", "News laden..."
 
 # --- HAUPT-ANSICHT ---
-try:
-    st.image("TankTip.png", use_container_width=True) 
-except:
-    st.title("TankTip")
+try: st.image("TankTip.png", use_container_width=True)
+except: st.title("TankTip")
 
 st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden?</h4>", unsafe_allow_html=True)
 st.write("") 
 
 col1, col2 = st.columns(2)
-with col1:
-    ort_in = st.text_input("📍 PLZ eingeben:", "24837")
-with col2:
-    srt_in = st.selectbox("⛽ Kraftstoff:", ["e5", "e10", "diesel"])
+with col1: ort_in = st.text_input("📍 PLZ eingeben:", "24837")
+with col2: srt_in = st.selectbox("⛽ Kraftstoff:", ["diesel", "e5", "e10"])
 
 if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
-    with st.spinner("Lade Live-Preise, checke Historie und KI-Prognose..."):
+    with st.spinner("KI analysiert Markt und Historie..."):
         lat, lng = hole_koordinaten(ort_in)
         if lat:
-            roh_stationen = hole_tankstellen(lat, lng, 5, srt_in)
-            stationen = sorted([s for s in roh_stationen if s.get('price')], key=lambda x: x['price'])
-            
+            stationen = sorted([s for s in hole_tankstellen(lat, lng, 5, srt_in) if s.get('price')], key=lambda x: x['price'])
             if stationen:
                 best = stationen[0]
-                
-                # Daten aus Google Sheet EIMAL abrufen für Historie & aktuelles Ziel
                 sheet_daten = hole_google_sheet_daten()
-                
-                # Aktuelles KI-Ziel extrahieren
-                ki_ziel = None
-                ki_msg = "TimesFM sammelt noch... (Standardwert wird genutzt)"
+                ki_ziel, ki_msg = None, "Standardwert wird genutzt (-4ct)"
                 if sheet_daten:
                     for row in reversed(sheet_daten):
                         if len(row) >= 5 and str(row[2]).lower() == srt_in.lower():
-                            ki_wert = str(row[4]).strip().replace(',', '.')
-                            if ki_wert and ki_wert != "Warten...":
-                                try:
-                                    ki_ziel = float(ki_wert)
-                                    ki_msg = "TimesFM Daten live aus Google Sheet"
-                                    break
+                            val = str(row[4]).strip().replace(',', '.')
+                            if val and val not in ["", "Warten..."]:
+                                try: ki_ziel, ki_msg = float(val), "KI-Daten live aus Google Sheet"; break
                                 except: pass
-                
                 if ki_ziel is None: ki_ziel = best['price'] - 0.04
-                
-                basis_drop = ki_ziel - best['price']
-                
-                # --- STRIKTE LOGIK OHNE TOLERANZ ---
+
+                # STRIKTE LOGIK & ZEIT-TIPP
                 jetzt = best['price'] <= ki_ziel
-                
-                # --- NEWS INFOBOX ---
+                stunde = datetime.now().hour
+                if jetzt: zeit_txt = "⏳ Optimales Fenster: SOFORT"
+                elif stunde < 17: zeit_txt = "⏳ Tipp: Warte auf den Abend (meist ab 18-21 Uhr am günstigsten)"
+                elif 17 <= stunde < 21: zeit_txt = "⏳ Tipp: Preise fallen oft noch bis 21 Uhr. Etwas Geduld!"
+                else: zeit_txt = "⏳ Tipp: Preise ziehen nachts an. Lieber morgen Nachmittag tanken."
+
+                # UI AUSGABE
                 trend, news_msg = ki_news_check()
                 if trend == "STEIGEND": st.warning(f"📈 **Langfrist-Trend:** {news_msg}")
                 elif trend == "FALLEND": st.success(f"📉 **Langfrist-Trend:** {news_msg}")
                 else: st.info(f"⚖️ **Langfrist-Trend:** {news_msg}")
 
-                # --- STATUS KARTE & ZEIT-TIPP ---
-                status_cls = "tanken-jetzt" if jetzt else "warten-später"
-                status_txt = "JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"
-                
-                aktuelle_stunde = datetime.now().hour
-                if jetzt:
-                    zeit_txt = "⏳ Optimales Fenster: SOFORT"
-                else:
-                    if aktuelle_stunde < 17:
-                        zeit_txt = "⏳ Prognose: Warte auf den Abend (meist ab 18-21 Uhr am günstigsten)"
-                    elif 17 <= aktuelle_stunde < 21:
-                        zeit_txt = "⏳ Prognose: Preise fallen oft noch leicht bis 21 Uhr. Etwas Geduld!"
-                    else:
-                        zeit_txt = "⏳ Prognose: Tankstellen ziehen die Preise nachts an. Lieber morgen Nachmittag tanken."
-                
-                st.markdown(f"""
-                <div class="empfehlung-card {status_cls}">
-                    <div style="text-transform: uppercase; letter-spacing: 2px;">KI Strategie-Modell</div>
-                    <div style="font-size: 2.8rem; font-weight: 900; margin: 5px 0;">{status_txt}</div>
-                    <div class="zeit-pill">{zeit_txt}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # --- TACHO ---
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number", value = best['price'],
-                    gauge = {
-                        'axis': {'range': [best['price']-0.1, best['price']+0.1]},
-                        'bar': {'color': "black"},
-                        'steps': [{'range': [0, ki_ziel], 'color': "#28a745"}, {'range': [ki_ziel, 5], 'color': "#dc3545"}],
-                        'threshold': {'line': {'color': "cyan", 'width': 5}, 'value': ki_ziel}
-                    }
-                ))
-                fig.update_layout(height=250, margin=dict(t=0, b=0))
+                st.markdown(f'<div class="empfehlung-card {"tanken-jetzt" if jetzt else "warten-später"}">'
+                            f'<div style="text-transform: uppercase; font-size: 0.9rem;">KI Strategie-Modell</div>'
+                            f'<div style="font-size: 2.5rem; font-weight: 900; margin: 5px 0;">{"JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"}</div>'
+                            f'<div class="zeit-pill">{zeit_txt}</div></div>', unsafe_allow_html=True)
+
+                fig = go.Figure(go.Indicator(mode="gauge+number", value=best['price'],
+                    gauge={'axis': {'range': [best['price']-0.1, best['price']+0.1]}, 'bar': {'color': "black"},
+                           'steps': [{'range': [0, ki_ziel], 'color': "#28a745"}, {'range': [ki_ziel, 5], 'color': "#dc3545"}],
+                           'threshold': {'line': {'color': "cyan", 'width': 4}, 'value': ki_ziel}}))
+                fig.update_layout(height=230, margin=dict(t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # --- KASSENBON ---
-                drop_color = "green" if basis_drop < 0 else "red"
-                st.markdown(f"""
-                <div class="analyse-box">
-                    <div class="accuracy-badge">🎯 {ki_msg}</div>
-                    <div class="rechenweg-zeile"><span>Bester Preis aktuell ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>
-                    <div class="rechenweg-zeile" style="color: {drop_color};"><span>Erwarteter Tages-Trend</span><span>{basis_drop*100:+.1f} ct</span></div>
-                    <div class="rechenweg-zeile"><span>= KI-Zielpreis</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # --- NEU: ERFOLGSQUOTE EXPANDER ---
-                quote, quote_msg = berechne_erfolgsquote(sheet_daten, srt_in)
-                with st.expander("📊 Hat die KI recht? (TimesFM Historie)"):
+
+                st.markdown(f'<div class="analyse-box"><div class="accuracy-badge">🎯 {ki_msg}</div>'
+                            f'<div class="rechenweg-zeile"><span>Bestpreis ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>'
+                            f'<div class="rechenweg-zeile"><span>KI-Ziel für heute</span><span>{ki_ziel:.3f} €</span></div></div>', unsafe_allow_html=True)
+
+                # ERFOLGSQUOTE
+                quote, q_msg = berechne_erfolgsquote(sheet_daten, srt_in)
+                with st.expander("📊 Hat die KI recht? (Erfolgsquote)"):
                     if quote is not None:
-                        st.metric("Erfolgsquote der KI-Vorhersagen", f"{quote}%")
-                        st.write(f"Das Modell hat das Preismuster erfolgreich erkannt und den Zielpreis in **{quote_msg}** Fällen exakt getroffen.")
+                        st.metric("Treffsicherheit", f"{quote}%")
+                        st.write(f"Das Muster wurde in **{q_msg}** Fällen korrekt erkannt.")
                         st.progress(quote / 100)
-                    else:
-                        st.write("Die KI lernt noch! Es sind in Google Sheets noch nicht genug Preis-Drops dokumentiert, um eine Quote zu berechnen.")
-                
-                st.write("") # Etwas Abstand
-                
-                # --- PREISMAST ---
+                    else: st.info(f"Info: {q_msg} (Prüfe Spalte E in Google Sheets)")
+
                 mast = '<div class="totem-mast">'
                 for i, s in enumerate(stationen[:3]):
                     c = "#28a745" if i == 0 else "#ffc107" if i == 1 else "#dc3545"
-                    mast += f'<div class="mast-row"><div><b>{s["brand"]}</b><br><small>{s.get("dist")} km</small></div><div style="color:{c}; font-size: 1.8rem; font-weight: bold;">{s["price"]:.3f}</div></div>'
+                    mast += f'<div class="mast-row"><div><b>{s["brand"]}</b><br><small>{s.get("dist")} km</small></div>' \
+                            f'<div style="color:{c}; font-size: 1.6rem; font-weight: bold;">{s["price"]:.3f}</div></div>'
                 st.markdown(mast + '</div>', unsafe_allow_html=True)
-        else:
-            st.error("Keine Tankstellen gefunden. Vielleicht fährst du elektrisch?")
+            else: st.error("Keine Tankstellen gefunden.")
 
-# --- VERSTECKTE SYSTEM-DIAGNOSE ---
+# --- FOOTER ---
 st.write("---")
-with st.expander("🔧 Technik-Ecke (Nur für Nerds)"):
-    if hole_gcp_creds(): st.success("✅ Google Sheets verbunden")
+with st.expander("🛡️ System-Status & Diagnosedaten"):
+    if hole_gcp_creds(): st.success("✅ Google Cloud API verbunden")
     oel = hole_marktpreis("BZ=F")
-    if oel: st.metric("Ölpreis (Brent)", f"{oel} $")
+    if oel: st.metric("Globaler Ölpreis (Brent)", f"{oel} $")
