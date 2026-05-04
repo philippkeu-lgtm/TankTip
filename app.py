@@ -53,23 +53,54 @@ def hole_gcp_creds():
     try: return json.loads(gcp_secret) if isinstance(gcp_secret, str) else dict(gcp_secret)
     except: return None
 
-def hole_echte_ki_daten(sorte):
+def hole_google_sheet_daten():
     creds_dict = hole_gcp_creds()
-    if not creds_dict: return None, "Keine Google-Verbindung"
+    if not creds_dict: return None
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open("Tankprotokoll").sheet1
-        daten = sheet.get_all_values() 
-        for row in reversed(daten):
-            if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
-                ki_wert = str(row[4]).strip().replace(',', '.')
-                if ki_wert and ki_wert != "Warten...":
-                    return float(ki_wert), "TimesFM Daten live aus Google Sheet"
-        return None, "Noch keine TimesFM Daten gefunden"
-    except Exception as e:
-        return None, f"Ladefehler: {str(e)}"
+        return sheet.get_all_values()
+    except: return None
+
+def berechne_erfolgsquote(daten, sorte):
+    if not daten: return None, "Keine Datenverbindung"
+    treffer = 0
+    total = 0
+    
+    # Gehe durch die Historie (alt zu neu)
+    for i in range(len(daten) - 5): 
+        row = daten[i]
+        if len(row) >= 5 and str(row[2]).lower() == sorte.lower():
+            try:
+                aktuell_preis = float(str(row[3]).strip().replace(',', '.'))
+                prog_ziel = float(str(row[4]).strip().replace(',', '.'))
+                
+                # Wir bewerten nur, wenn die KI gesagt hat: "Preis wird fallen!"
+                if prog_ziel < aktuell_preis:
+                    total += 1
+                    hit = False
+                    lookahead = 0
+                    
+                    # Schau in die Zukunft (die nächsten ca. 12-24 Stunden)
+                    for j in range(i+1, len(daten)):
+                        future_row = daten[j]
+                        if len(future_row) >= 4 and str(future_row[2]).lower() == sorte.lower():
+                            lookahead += 1
+                            future_preis = float(str(future_row[3]).strip().replace(',', '.'))
+                            # Wenn der Preis das Ziel erreicht (oder um max 1 Cent verfehlt) = TREFFER
+                            if future_preis <= prog_ziel + 0.01:
+                                hit = True
+                                break
+                            if lookahead > 24: # Breche die Suche für diesen Tag ab
+                                break
+                    if hit: treffer += 1
+            except: pass
+            
+    if total < 5: return None, "Zu wenig historische Daten gesammelt."
+    quote = int((treffer / total) * 100)
+    return quote, f"{treffer} von {total} Vorhersagen"
 
 def hole_koordinaten(ort):
     try:
@@ -79,7 +110,7 @@ def hole_koordinaten(ort):
             if resp.status_code == 200:
                 data = resp.json()
                 return float(data['places'][0]['latitude']), float(data['places'][0]['longitude'])
-        loc = Nominatim(user_agent="tanktip_pro_v3").geocode(f"{ort}, Deutschland", timeout=10)
+        loc = Nominatim(user_agent="tanktip_pro_v4").geocode(f"{ort}, Deutschland", timeout=10)
         return (loc.latitude, loc.longitude) if loc else (None, None)
     except: return (None, None)
 
@@ -129,7 +160,6 @@ try:
 except:
     st.title("TankTip")
 
-# Dein gewünschter Slogan!
 st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden?</h4>", unsafe_allow_html=True)
 st.write("") 
 
@@ -140,7 +170,7 @@ with col2:
     srt_in = st.selectbox("⛽ Kraftstoff:", ["e5", "e10", "diesel"])
 
 if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
-    with st.spinner("Lade Live-Preise, News und KI-Prognose..."):
+    with st.spinner("Lade Live-Preise, checke Historie und KI-Prognose..."):
         lat, lng = hole_koordinaten(ort_in)
         if lat:
             roh_stationen = hole_tankstellen(lat, lng, 5, srt_in)
@@ -148,12 +178,29 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
             
             if stationen:
                 best = stationen[0]
-                ki_ziel, ki_msg = hole_echte_ki_daten(srt_in)
+                
+                # Daten aus Google Sheet EIMAL abrufen für Historie & aktuelles Ziel
+                sheet_daten = hole_google_sheet_daten()
+                
+                # Aktuelles KI-Ziel extrahieren
+                ki_ziel = None
+                ki_msg = "TimesFM sammelt noch... (Standardwert wird genutzt)"
+                if sheet_daten:
+                    for row in reversed(sheet_daten):
+                        if len(row) >= 5 and str(row[2]).lower() == srt_in.lower():
+                            ki_wert = str(row[4]).strip().replace(',', '.')
+                            if ki_wert and ki_wert != "Warten...":
+                                try:
+                                    ki_ziel = float(ki_wert)
+                                    ki_msg = "TimesFM Daten live aus Google Sheet"
+                                    break
+                                except: pass
+                
                 if ki_ziel is None: ki_ziel = best['price'] - 0.04
                 
                 basis_drop = ki_ziel - best['price']
                 
-                # --- NEU: STRIKTERE LOGIK OHNE TOLERANZ ---
+                # --- STRIKTE LOGIK OHNE TOLERANZ ---
                 jetzt = best['price'] <= ki_ziel
                 
                 # --- NEWS INFOBOX ---
@@ -166,7 +213,6 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
                 status_cls = "tanken-jetzt" if jetzt else "warten-später"
                 status_txt = "JETZT TANKEN" if jetzt else "AUF ZIELPREIS WARTEN"
                 
-                # Dynamische Zeitempfehlung basierend auf der aktuellen Uhrzeit
                 aktuelle_stunde = datetime.now().hour
                 if jetzt:
                     zeit_txt = "⏳ Optimales Fenster: SOFORT"
@@ -209,6 +255,18 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
                     <div class="rechenweg-zeile"><span>= KI-Zielpreis</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # --- NEU: ERFOLGSQUOTE EXPANDER ---
+                quote, quote_msg = berechne_erfolgsquote(sheet_daten, srt_in)
+                with st.expander("📊 Hat die KI recht? (TimesFM Historie)"):
+                    if quote is not None:
+                        st.metric("Erfolgsquote der KI-Vorhersagen", f"{quote}%")
+                        st.write(f"Das Modell hat das Preismuster erfolgreich erkannt und den Zielpreis in **{quote_msg}** Fällen exakt getroffen.")
+                        st.progress(quote / 100)
+                    else:
+                        st.write("Die KI lernt noch! Es sind in Google Sheets noch nicht genug Preis-Drops dokumentiert, um eine Quote zu berechnen.")
+                
+                st.write("") # Etwas Abstand
                 
                 # --- PREISMAST ---
                 mast = '<div class="totem-mast">'
