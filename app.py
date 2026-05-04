@@ -129,7 +129,7 @@ def ki_news_check():
 try: st.image("TankTip.png", use_container_width=True)
 except: st.title("TankTip")
 
-st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden?</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden!</h4>", unsafe_allow_html=True)
 st.write("") 
 
 col1, col2 = st.columns(2)
