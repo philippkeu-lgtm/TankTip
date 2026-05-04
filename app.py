@@ -100,7 +100,7 @@ def hole_koordinaten(ort):
             if r.status_code == 200:
                 d = r.json()
                 return float(d['places'][0]['latitude']), float(d['places'][0]['longitude'])
-        loc = Nominatim(user_agent="tanktip_v4").geocode(f"{ort}, Deutschland")
+        loc = Nominatim(user_agent="tanktip_v5").geocode(f"{ort}, Deutschland")
         return (loc.latitude, loc.longitude) if loc else (None, None)
     except: return (None, None)
 
@@ -129,7 +129,7 @@ def ki_news_check():
 try: st.image("TankTip.png", use_container_width=True)
 except: st.title("TankTip")
 
-st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden!</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align: center; color: gray;'>Moin, lass uns den besten Zeitpunkt zum Tanken finden?</h4>", unsafe_allow_html=True)
 st.write("") 
 
 col1, col2 = st.columns(2)
@@ -162,6 +162,8 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
                 elif 17 <= stunde < 21: zeit_txt = "⏳ Tipp: Preise fallen oft noch bis 21 Uhr. Etwas Geduld!"
                 else: zeit_txt = "⏳ Tipp: Preise ziehen nachts an. Lieber morgen Nachmittag tanken."
 
+                basis_drop = ki_ziel - best['price']
+
                 # UI AUSGABE
                 trend, news_msg = ki_news_check()
                 if trend == "STEIGEND": st.warning(f"📈 **Langfrist-Trend:** {news_msg}")
@@ -180,9 +182,16 @@ if st.button("🔍 MARKT-ANALYSE STARTEN", use_container_width=True):
                 fig.update_layout(height=230, margin=dict(t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.markdown(f'<div class="analyse-box"><div class="accuracy-badge">🎯 {ki_msg}</div>'
-                            f'<div class="rechenweg-zeile"><span>Bestpreis ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>'
-                            f'<div class="rechenweg-zeile"><span>KI-Ziel für heute</span><span>{ki_ziel:.3f} €</span></div></div>', unsafe_allow_html=True)
+                # --- KASSENBON ---
+                drop_color = "green" if basis_drop < 0 else "red"
+                st.markdown(f"""
+                <div class="analyse-box">
+                    <div class="accuracy-badge">🎯 {ki_msg}</div>
+                    <div class="rechenweg-zeile"><span>Bester Preis aktuell ({best["brand"]})</span><span>{best["price"]:.3f} €</span></div>
+                    <div class="rechenweg-zeile" style="color: {drop_color};"><span>Erwarteter Tages-Trend</span><span>{basis_drop*100:+.1f} ct</span></div>
+                    <div class="rechenweg-zeile"><span>= Erwarteter Tages-Tiefstpreis</span><span style="color: #008b8b;">{ki_ziel:.3f} €</span></div>
+                </div>
+                """, unsafe_allow_html=True)
 
                 # ERFOLGSQUOTE
                 quote, q_msg = berechne_erfolgsquote(sheet_daten, srt_in)
